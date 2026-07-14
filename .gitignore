@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+
+# Benchmark artifacts
+work/
+results/
+data/pdfs/
+
+# Credentials — never commit the GCP service-account key
+*.json
+!config*.json
+ocr-benchmark-*.json
+GOOGLE_APPLICATION_CREDENTIALS

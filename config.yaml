@@ -1,0 +1,70 @@
+# ocrbench configuration
+#
+# All paths are relative to the repository root unless absolute.
+
+paths:
+  input_pdfs: data/pdfs          # source booklet PDFs, one file per document id
+  work_dir: work
+  images_dir: work/images        # rendered PNGs: work/images/{doc}/page_{n}.png
+  raw_dir: work/raw              # raw engine responses (e.g. work/raw/docai/*.json)
+  ground_truth_dir: ground_truth # ground_truth/{doc}/page_{n}.txt
+  results_dir: results
+
+render:
+  dpi: 300                       # PyMuPDF render resolution
+
+paddle:
+  lang: en
+  use_gpu: false                 # overridden by --device on the CLI
+  sampler_interval: 0.1          # seconds between resource samples during Paddle runs
+
+docai:
+  project_id: "YOUR_GCP_PROJECT_ID"
+  processor_id: "YOUR_PROCESSOR_ID"
+  region: "us"                   # "us" or "eu"
+  # processor_version: ""        # optional; blank uses the processor default
+  # credentials come from GOOGLE_APPLICATION_CREDENTIALS env var (the service
+  # account JSON key), so it is never hard-coded here.
+  mime_type: "image/png"
+
+# Per-document page manifests: which 1-indexed PDF pages are actual answer pages.
+# Cover, instruction and feedback pages are deliberately excluded.
+manifests:
+  doc001:
+    - 3
+    - 4
+    - 5
+  doc002:
+    - 2
+    - 3
+    - 4
+
+# Cost model used by the scorecard ($ per page).
+costs:
+  paddle_per_page: 0.0           # local inference, no per-page charge
+  docai_per_page: 0.0015         # example Document OCR list price ($1.50 / 1000 pages)
+
+metrics:
+  strip_punctuation: true
+  fuzzy_threshold: 85            # 0-100; boilerplate lines at/above this are dropped
+
+# Boilerplate lines removed before scoring (fuzzy-matched, case-insensitive).
+boilerplate:
+  - "VAJIRAM & RAVI"
+  - "Don't write anything in this part"
+  - "Introduction"
+  - "Body"
+  - "Conclusion"
+  - "Presentation"
+  - "Marks:"
+  - "UPSE CSE 2025"
+
+# Scorecard weights (should sum to 1.0). Each dimension is normalized across the
+# engines being compared, then combined with these weights.
+scorecard:
+  weights:
+    accuracy: 0.40
+    latency: 0.20
+    cost: 0.15
+    throughput: 0.15
+    resources: 0.10

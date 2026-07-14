@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ocrbench"
+version = "0.1.0"
+description = "Benchmark PaddleOCR vs Google Document AI on scanned handwritten English exam booklets"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "pyyaml>=6.0",
+    "jiwer>=3.0",
+    "pymupdf>=1.23",
+    "psutil>=5.9",
+    "rapidfuzz>=3.0",
+]
+
+[project.optional-dependencies]
+# paddlepaddle itself is intentionally NOT listed: install it manually on the
+# machine that runs real inference (e.g. Colab GPU). Locally we only need the
+# rest of the package to be importable and testable.
+paddle = ["paddleocr>=2.7"]
+docai = ["google-cloud-documentai>=2.20"]
+gpu = ["pynvml>=11.5"]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+ocrbench = "ocrbench.run:main"
+ocrbench-score = "ocrbench.scorecard:main"
+
+[tool.setuptools.packages.find]
+include = ["ocrbench*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
