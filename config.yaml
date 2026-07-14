@@ -29,15 +29,23 @@ docai:
 
 # Per-document page manifests: which 1-indexed PDF pages are actual answer pages.
 # Cover, instruction and feedback pages are deliberately excluded.
+# Accuracy subset: GS-1 pages 6-9, GS-2 pages 5-8, GS-3 pages 5-8.
 manifests:
-  doc001:
-    - 3
-    - 4
+  GS-1:
+    - 6
+    - 7
+    - 8
+    - 9
+  GS-2:
     - 5
-  doc002:
-    - 2
-    - 3
-    - 4
+    - 6
+    - 7
+    - 8
+  GS-3:
+    - 5
+    - 6
+    - 7
+    - 8
 
 # Cost model used by the scorecard ($ per page).
 costs:
