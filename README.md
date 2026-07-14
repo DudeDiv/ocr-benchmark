@@ -86,7 +86,32 @@ manifests:
 ```
 
 Drop the corresponding ground truth in `ground_truth/{doc}/page_{n}.txt` and the
-metrics will pick it up automatically.
+metrics will pick it up automatically. Ground truth is optional per page — if a
+`page_N.txt` doesn't exist, that page's `wer`, `cer`, and `exact_match` come back
+as null and the run keeps going. Only the pages you've actually transcribed get a
+real error rate.
+
+## How the accuracy numbers hold up
+
+Hand-transcribing booklets is slow, so only a subset of pages has verified ground
+truth. Those pages are the real evidence — the WER/CER you can defend. To avoid
+resting the whole accuracy story on a dozen pages, every page (transcribed or
+not) also gets two reference-free proxies:
+
+- **`dictionary_validity`** — the fraction of alphabetic output words that are
+  real English words (via pyspellchecker). It catches garbage output, but it
+  can't see valid-word substitutions: "cat" mis-read as "cot" still scores as
+  valid. So it tells you the OCR is producing words, not that they're the right
+  words.
+- **`cross_engine_agreement`** — WER between the PaddleOCR and Doc AI outputs for
+  the same page after normalization. It shows you where the two engines diverge,
+  which is where to look — but agreement isn't correctness. If both engines make
+  the same mistake it reads as perfect agreement, and a high value tells you they
+  disagree, not who's right. (This one only fills in once both engines have run.)
+
+Treat these as supporting signals with those limits stated plainly. The verified
+pages anchor the real WER/CER; the proxies just extend the pattern across the
+full set.
 
 ## Tests
 

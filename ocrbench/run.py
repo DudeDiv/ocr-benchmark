@@ -65,16 +65,23 @@ class PageRow:
     network_seconds: Optional[float]
     wer: Optional[float]
     cer: Optional[float]
+    exact_match: Optional[bool]
     ref_word_count: int
     hyp_word_count: int
     ocr_word_count: int
     mean_confidence: Optional[float]
     min_confidence: Optional[float]
+    # reference-free proxies
+    dictionary_validity: Optional[float] = None
+    cross_engine_agreement: Optional[float] = None
     peak_cpu_percent: Optional[float] = None
     peak_ram_mb: Optional[float] = None
     peak_gpu_util_percent: Optional[float] = None
     peak_vram_mb: Optional[float] = None
     error: Optional[str] = None
+    # normalized hypothesis text, kept so cross-engine agreement can be computed
+    # after both engines have run. Included in JSON, excluded from the CSV.
+    normalized_hyp: Optional[str] = None
 
 
 def _read_ground_truth(gt_dir: Path, doc: str, page: int) -> Optional[str]:
@@ -180,11 +187,14 @@ def run_over_manifest(
                 network_seconds=result.network_seconds,
                 wer=m.wer,
                 cer=m.cer,
+                exact_match=m.exact_match,
                 ref_word_count=m.ref_word_count,
                 hyp_word_count=m.hyp_word_count,
                 ocr_word_count=m.ocr_word_count,
                 mean_confidence=m.mean_confidence,
                 min_confidence=m.min_confidence,
+                dictionary_validity=m.dictionary_validity,
+                normalized_hyp=m.normalized_hyp,
             )
             if resources is not None:
                 rd = resources.as_dict()
@@ -200,8 +210,8 @@ def _error_row(doc, page, engine, device, image_path, msg) -> PageRow:
     return PageRow(
         doc=doc, page=page, engine=engine, device=device,
         image_path=str(image_path), inference_seconds=0.0, network_seconds=None,
-        wer=None, cer=None, ref_word_count=0, hyp_word_count=0, ocr_word_count=0,
-        mean_confidence=None, min_confidence=None, error=msg,
+        wer=None, cer=None, exact_match=None, ref_word_count=0, hyp_word_count=0,
+        ocr_word_count=0, mean_confidence=None, min_confidence=None, error=msg,
     )
 
 
@@ -219,6 +229,12 @@ def aggregate(rows: List[PageRow], engine: str, device: str, cfg: Config) -> dic
     n_pages = len(ok)
     cost_per_page = cfg.cost_per_page(engine)
 
+    scored = [r for r in ok if r.wer is not None]  # pages with usable ground truth
+    em = [r for r in ok if r.exact_match is not None]
+    exact_match_rate = (
+        sum(1 for r in em if r.exact_match) / len(em) if em else None
+    )
+
     return {
         "engine": engine,
         "device": device,
@@ -230,8 +246,13 @@ def aggregate(rows: List[PageRow], engine: str, device: str, cfg: Config) -> dic
         "pages_total": len(rows),
         "pages_ok": n_pages,
         "pages_failed": len(rows) - n_pages,
+        "pages_with_ground_truth": len(scored),  # the accuracy subset actually scored
         "mean_wer": _avg([r.wer for r in ok]),
         "mean_cer": _avg([r.cer for r in ok]),
+        "exact_match_rate": exact_match_rate,
+        # reference-free proxies, spanning every page (see metrics.py caveats):
+        "mean_dictionary_validity": _avg([r.dictionary_validity for r in ok]),
+        "mean_cross_engine_agreement": _avg([r.cross_engine_agreement for r in ok]),
         "mean_inference_seconds": _avg([r.inference_seconds for r in ok]),
         "total_inference_seconds": total_inference,
         "mean_network_seconds": _avg([r.network_seconds for r in ok]),
@@ -257,7 +278,8 @@ def write_results(result: dict, results_dir: Path, engine: str, device: str) -> 
 
 CSV_FIELDS = [
     "engine", "device", "doc", "page", "inference_seconds", "network_seconds",
-    "wer", "cer", "ref_word_count", "hyp_word_count", "ocr_word_count",
+    "wer", "cer", "exact_match", "dictionary_validity", "cross_engine_agreement",
+    "ref_word_count", "hyp_word_count", "ocr_word_count",
     "mean_confidence", "min_confidence", "peak_cpu_percent", "peak_ram_mb",
     "peak_gpu_util_percent", "peak_vram_mb", "error",
 ]
@@ -286,6 +308,76 @@ def rebuild_combined_csv(results_dir: Path) -> Path:
     return out_path
 
 
+def augment_cross_engine_agreement(results_dir: Path) -> bool:
+    """Fill in cross-engine agreement across all result files, if both engines ran.
+
+    Pairs Paddle and Doc AI outputs by (doc, page) using the stored normalized
+    hypothesis text, computes one canonical WER per page (Paddle as reference so
+    the value is identical in every file), writes it back into each page, and
+    refreshes each file's ``mean_cross_engine_agreement``. No-op until both
+    engines have results present. Returns True if anything was updated.
+    """
+    from .metrics import cross_engine_agreement
+
+    results_dir = Path(results_dir)
+    files: Dict[Path, dict] = {}
+    hyp_by_engine: Dict[str, Dict[tuple, str]] = {"paddle": {}, "docai": {}}
+
+    for jf in sorted(results_dir.glob("*.json")):
+        if jf.name == "scorecard.json":
+            continue
+        try:
+            data = json.loads(jf.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if "engine" not in data or "pages" not in data:
+            continue
+        files[jf] = data
+        eng = data.get("engine")
+        if eng in hyp_by_engine:
+            for p in data["pages"]:
+                if p.get("error") or p.get("normalized_hyp") is None:
+                    continue
+                # First writer wins if a doc/page appears under multiple devices.
+                hyp_by_engine[eng].setdefault((p["doc"], p["page"]), p["normalized_hyp"])
+
+    if not hyp_by_engine["paddle"] or not hyp_by_engine["docai"]:
+        return False  # need both engines to compare
+
+    # One canonical value per shared page (Paddle as the reference side).
+    agreement: Dict[tuple, Optional[float]] = {}
+    for key, paddle_text in hyp_by_engine["paddle"].items():
+        docai_text = hyp_by_engine["docai"].get(key)
+        if docai_text is None:
+            continue
+        agreement[key] = cross_engine_agreement(
+            paddle_text, docai_text, prenormalized=True
+        )
+
+    updated = False
+    for jf, data in files.items():
+        if data.get("engine") not in ("paddle", "docai"):
+            continue
+        vals: List[float] = []
+        touched = False
+        for p in data["pages"]:
+            key = (p.get("doc"), p.get("page"))
+            if key in agreement:
+                p["cross_engine_agreement"] = agreement[key]
+                touched = True
+                if agreement[key] is not None:
+                    vals.append(agreement[key])
+        if touched:
+            data["mean_cross_engine_agreement"] = (
+                float(mean(vals)) if vals else None
+            )
+            jf.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            updated = True
+    return updated
+
+
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
@@ -311,16 +403,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     result = aggregate(rows, args.engine, args.device, cfg)
 
     out_path = write_results(result, cfg.results_dir(), args.engine, args.device)
+    # Once both engines have run, this fills cross-engine agreement across all
+    # result files; until then it's a no-op.
+    paired = augment_cross_engine_agreement(cfg.results_dir())
     csv_path = rebuild_combined_csv(cfg.results_dir())
 
     print(f"Wrote {out_path}")
     print(f"Wrote {csv_path}")
     print(
         f"pages_ok={result['pages_ok']}/{result['pages_total']} "
+        f"scored={result['pages_with_ground_truth']} "
         f"mean_wer={_fmt(result['mean_wer'])} "
         f"mean_cer={_fmt(result['mean_cer'])} "
+        f"dict_validity={_fmt(result['mean_dictionary_validity'])} "
         f"mean_infer_s={_fmt(result['mean_inference_seconds'])}"
     )
+    if paired:
+        print("Cross-engine agreement computed against the other engine's results.")
     return 0
 
 

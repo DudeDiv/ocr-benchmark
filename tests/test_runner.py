@@ -63,6 +63,58 @@ def test_aggregate_and_write(temp_workspace, tmp_path):
     assert "paddle,cpu,doc001,1" in content
 
 
+def test_missing_ground_truth_is_skipped_not_crashed(temp_workspace):
+    pytest.importorskip("jiwer")
+    cfg, hyp, gt = temp_workspace
+    # Delete the ground truth for page 2 only.
+    (cfg.ground_truth_dir() / "doc001" / "page_2.txt").unlink()
+    engine = MockEngine(name="paddle", texts=hyp)
+
+    rows = runner.run_over_manifest(engine, cfg, device="cpu")
+    by_page = {(r.doc, r.page): r for r in rows}
+
+    # page 1 still scored
+    assert by_page[("doc001", 1)].wer == 0.0
+    assert by_page[("doc001", 1)].exact_match is True
+    # page 2 has no GT: wer/cer/exact_match are null, but the run did not crash
+    p2 = by_page[("doc001", 2)]
+    assert p2.error is None
+    assert p2.wer is None and p2.cer is None and p2.exact_match is None
+
+    agg = runner.aggregate(rows, "paddle", "cpu", cfg)
+    assert agg["pages_ok"] == 2
+    assert agg["pages_with_ground_truth"] == 1  # only page 1 scored
+
+
+def test_cross_engine_agreement_augmentation(temp_workspace):
+    pytest.importorskip("jiwer")
+    cfg, hyp, gt = temp_workspace
+    results_dir = cfg.results_dir()
+
+    # docai reads the same page text; page 2 differs by one word from paddle.
+    docai_texts = dict(hyp)
+    docai_texts["doc001/page_2"] = "jumps over the lazy dog"  # paddle had "jumps over the lazy dog" too
+
+    for name, texts in (("paddle", hyp), ("docai", docai_texts)):
+        eng = MockEngine(name=name, texts=texts)
+        rows = runner.run_over_manifest(eng, cfg, device="cpu")
+        agg = runner.aggregate(rows, name, "cpu", cfg)
+        runner.write_results(agg, results_dir, name, "cpu")
+
+    # Before augmentation the agreement is unset.
+    updated = runner.augment_cross_engine_agreement(results_dir)
+    assert updated is True
+
+    paddle = json.loads((results_dir / "paddle_cpu.json").read_text("utf-8"))
+    docai = json.loads((results_dir / "docai_cpu.json").read_text("utf-8"))
+
+    # Both engines produced identical text here -> agreement WER 0 on every page.
+    for data in (paddle, docai):
+        vals = [p["cross_engine_agreement"] for p in data["pages"]]
+        assert all(v == 0.0 for v in vals)
+        assert data["mean_cross_engine_agreement"] == 0.0
+
+
 def test_docai_cost_applied(temp_workspace):
     pytest.importorskip("jiwer")
     cfg, hyp, gt = temp_workspace

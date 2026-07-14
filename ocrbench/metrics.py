@@ -95,11 +95,14 @@ def normalize_text(
 class PageMetrics:
     wer: Optional[float] = None
     cer: Optional[float] = None
+    exact_match: Optional[bool] = None  # None when no ground-truth file exists
     ref_word_count: int = 0
     hyp_word_count: int = 0
     mean_confidence: Optional[float] = None
     min_confidence: Optional[float] = None
     ocr_word_count: int = 0  # words reported by the engine (pre-normalization)
+    # Reference-free proxy (computed for every page, GT or not):
+    dictionary_validity: Optional[float] = None
     normalized_hyp: str = field(default="", repr=False)
     normalized_ref: str = field(default="", repr=False)
 
@@ -133,6 +136,12 @@ def compute_metrics(
         normalized_hyp=norm_hyp,
     )
 
+    # Reference-free: computed for every page regardless of ground truth.
+    m.dictionary_validity = dictionary_validity_score(norm_hyp)
+
+    # No ground-truth file for this page -> wer/cer/exact_match stay None and we
+    # keep going. This is the accuracy subset vs. full-set distinction: only the
+    # pages with a page_N.txt get a real WER/CER.
     if reference is None:
         return m
 
@@ -141,9 +150,11 @@ def compute_metrics(
     )
     m.normalized_ref = norm_ref
     m.ref_word_count = len(norm_ref.split())
+    m.exact_match = norm_hyp.strip() == norm_ref.strip()
 
     if not norm_ref.strip():
-        # No reference content to score against.
+        # Reference exists but is blank (e.g. a genuinely empty page); exact_match
+        # is still meaningful, but WER/CER against an empty reference is not.
         return m
 
     import jiwer  # lazy import
@@ -151,3 +162,79 @@ def compute_metrics(
     m.wer = float(jiwer.wer(norm_ref, norm_hyp))
     m.cer = float(jiwer.cer(norm_ref, norm_hyp))
     return m
+
+
+# --------------------------------------------------------------------------- #
+# Reference-free proxies
+#
+# These do NOT establish accuracy on their own. They are supporting signals that
+# extend a pattern across the full page set when only a subset has verified
+# ground truth. Each has a known blind spot, documented on the function.
+# --------------------------------------------------------------------------- #
+_SPELL = None  # cached SpellChecker; the English wordlist load isn't free.
+
+
+def _get_spell():
+    """Return a cached English SpellChecker, or None if pyspellchecker is absent."""
+    global _SPELL
+    if _SPELL is None:
+        try:
+            from spellchecker import SpellChecker
+
+            _SPELL = SpellChecker(language="en")
+        except Exception:  # pragma: no cover - optional dependency
+            _SPELL = False  # sentinel: tried and unavailable
+    return _SPELL or None
+
+
+def dictionary_validity_score(text: str) -> Optional[float]:
+    """Fraction of alphabetic output words found in an English wordlist.
+
+    A high value means the OCR is emitting real words; a low value flags garbage.
+
+    Blind spot: it cannot catch valid-word substitutions. "cat" mis-read as "cot"
+    scores as perfectly valid, because both are real words. So this detects
+    gibberish output, not wrong-but-plausible output. Returns None if
+    pyspellchecker is unavailable or there are no alphabetic words to judge.
+    """
+    spell = _get_spell()
+    if spell is None:
+        return None
+    words = [w for w in (text or "").split() if w.isalpha()]
+    if not words:
+        return None
+    unknown = spell.unknown(words)
+    return (len(words) - len(unknown)) / len(words)
+
+
+def cross_engine_agreement(
+    text_a: str,
+    text_b: str,
+    boilerplate: Optional[List[str]] = None,
+    strip_punctuation: bool = True,
+    fuzzy_threshold: float = 85,
+    prenormalized: bool = False,
+) -> Optional[float]:
+    """WER between two engines' outputs for the same page (``text_a`` as reference).
+
+    Low means the engines agree; high means they diverge. Pass already-normalized
+    text with ``prenormalized=True`` to skip re-normalization.
+
+    Blind spot: agreement is not correctness. Where both engines make the *same*
+    mistake this reads as perfect agreement, and a high value tells you the
+    engines disagree, not which one is right. It localizes divergence for review;
+    it does not adjudicate it. Returns None if the reference side is empty or
+    jiwer is unavailable.
+    """
+    if not prenormalized:
+        text_a = normalize_text(text_a, boilerplate, strip_punctuation, fuzzy_threshold)
+        text_b = normalize_text(text_b, boilerplate, strip_punctuation, fuzzy_threshold)
+
+    if not text_a.strip():
+        return None  # WER is undefined against an empty reference
+
+    try:
+        import jiwer  # lazy import
+    except Exception:  # pragma: no cover - optional dependency
+        return None
+    return float(jiwer.wer(text_a, text_b))

@@ -15,6 +15,7 @@ dependencies = [
     "pymupdf>=1.23",
     "psutil>=5.9",
     "rapidfuzz>=3.0",
+    "pyspellchecker>=0.8",  # reference-free dictionary_validity proxy
 ]
 
 [project.optional-dependencies]
