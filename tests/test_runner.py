@@ -154,6 +154,10 @@ def test_main_exits_nonzero_and_prints_tracebacks_on_total_failure(
     cfg, hyp, gt = temp_workspace
     failing_engine = MockEngine(name="paddle", texts=hyp, raise_error=RuntimeError("boom"))
 
+    # Bypass the dependency preflight so this test exercises the fail-loud
+    # aggregate/exit path regardless of whether paddleocr happens to be
+    # installed on the machine running the suite.
+    monkeypatch.setattr(runner, "preflight", lambda engine: None)
     monkeypatch.setattr(runner, "load_config", lambda path=None: cfg)
     monkeypatch.setattr(runner, "build_engine", lambda engine, device, c: failing_engine)
 
@@ -176,6 +180,7 @@ def test_main_prints_none_error_summary_on_full_success(
     cfg, hyp, gt = temp_workspace
     ok_engine = MockEngine(name="paddle", texts=hyp)
 
+    monkeypatch.setattr(runner, "preflight", lambda engine: None)
     monkeypatch.setattr(runner, "load_config", lambda path=None: cfg)
     monkeypatch.setattr(runner, "build_engine", lambda engine, device, c: ok_engine)
 
@@ -186,6 +191,45 @@ def test_main_prints_none_error_summary_on_full_success(
     assert "FATAL" not in captured.err
     assert "Errors: 0 of 2 page(s) failed." in captured.out
     assert "none" in captured.out
+
+
+def test_preflight_flags_missing_paddleocr():
+    # This dev machine deliberately does not have paddleocr installed (real
+    # runs happen on Colab GPU), so this exercises the real ImportError path.
+    try:
+        import paddleocr  # noqa: F401
+
+        pytest.skip("paddleocr is installed in this environment")
+    except ImportError:
+        pass
+
+    msg = runner.preflight("paddle")
+    assert msg is not None
+    assert "pip install" in msg
+    assert "paddleocr" in msg
+
+
+def test_preflight_passes_for_docai_core_dependency():
+    pytest.importorskip("google.cloud.documentai")
+    assert runner.preflight("docai") is None
+
+
+def test_main_fails_fast_on_missing_paddle_dependency(tmp_path, capsys):
+    try:
+        import paddleocr  # noqa: F401
+
+        pytest.skip("paddleocr is installed in this environment")
+    except ImportError:
+        pass
+
+    # No --config is needed: preflight must reject before load_config runs.
+    rc = runner.main(["--engine", "paddle", "--device", "cpu",
+                       "--config", str(tmp_path / "nonexistent.yaml")])
+    captured = capsys.readouterr()
+
+    assert rc == 1
+    assert "Missing dependency for --engine paddle" in captured.err
+    assert "pip install" in captured.err
 
 
 def test_docai_cost_applied(temp_workspace):

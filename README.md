@@ -14,20 +14,35 @@ into a single weighted score so I can compare the two at a glance.
 pip install -e .
 ```
 
-That gets you the core package. The engine-specific and GPU bits are optional
-extras, so grab whichever you need:
+That's enough for Doc AI — `google-cloud-documentai` is a normal, cross-platform
+client library, so it's a core dependency, not an extra. GPU resource sampling
+and dev tooling are optional extras, so grab whichever you need:
 
 ```bash
-pip install -e ".[docai]"   # google-cloud-documentai
 pip install -e ".[gpu]"     # pynvml, for reading GPU util/VRAM
 pip install -e ".[dev]"     # pytest
 ```
 
-One thing worth calling out: `pip install -e .` does **not** pull in PaddleOCR.
-That's on purpose. paddlepaddle is a pain to install locally (and I don't want it
-on my laptop), so I only install `paddlepaddle`/`paddleocr` on the box that does
-the real inference — usually a Colab GPU runtime. Everything still imports fine
-without it, so you can develop and run the tests locally either way.
+PaddleOCR is the one exception, and it's a two-step install:
+
+```bash
+pip install -e ".[paddle]"           # paddleocr itself
+pip install paddlepaddle-gpu         # or paddlepaddle for CPU-only
+```
+
+`paddlepaddle`/`paddlepaddle-gpu` is deliberately **not** listed anywhere in
+`pyproject.toml`, extras included — it has to match the CUDA version of whatever
+machine actually runs it (mine is a Colab GPU runtime), so pinning a version here
+would just be wrong somewhere. Check [the PaddlePaddle install
+matrix](https://www.paddlepaddle.org.cn/en/install/quick) for the exact command
+for your CUDA version before installing it. Everything else — the whole rest of
+the package — still imports fine without either paddle package installed, so you
+can develop and run the tests locally regardless.
+
+If you run `ocrbench.run --engine paddle` without paddleocr installed (or
+`--engine docai` without google-cloud-documentai, if you've somehow pruned it),
+the CLI checks for it up front and tells you the exact `pip install` to run,
+rather than dying on the first page — or twelve pages in.
 
 ## How it's laid out
 

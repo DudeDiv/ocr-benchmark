@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import importlib
 import json
 import platform
 import sys
@@ -18,12 +19,50 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .config import Config, load_config
 from .engines.base import OCREngine, OCRResult
 from .metrics import compute_metrics
 from .resources import ResourceSampler
+
+
+# --------------------------------------------------------------------------- #
+# Startup preflight
+# --------------------------------------------------------------------------- #
+# (importable module, pip install target) per engine. Checked before touching
+# any pages, so a missing dependency fails once with a clear message instead of
+# on every page -- or worse, silently, since the warm-up call swallows
+# exceptions by design (see run_over_manifest).
+_ENGINE_DEPENDENCIES: Dict[str, List[Tuple[str, str]]] = {
+    "paddle": [
+        (
+            "paddleocr",
+            "paddleocr>=3.0 (plus a matching paddlepaddle / paddlepaddle-gpu "
+            "build for your hardware -- see README)",
+        ),
+    ],
+    "docai": [
+        ("google.cloud.documentai", "google-cloud-documentai>=2.20"),
+    ],
+}
+
+
+def preflight(engine: str) -> Optional[str]:
+    """Import-check the selected engine's dependencies.
+
+    Returns a human-readable error message if something is missing, else None.
+    """
+    for module_name, pip_target in _ENGINE_DEPENDENCIES.get(engine, []):
+        try:
+            importlib.import_module(module_name)
+        except ImportError as exc:
+            return (
+                f"Missing dependency for --engine {engine}: cannot import "
+                f"'{module_name}' ({exc}).\n"
+                f'Fix: pip install "{pip_target}"'
+            )
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -424,6 +463,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--no-warmup", action="store_true", help="Skip the engine warm-up call"
     )
     args = parser.parse_args(argv)
+
+    missing = preflight(args.engine)
+    if missing:
+        print(missing, file=sys.stderr)
+        return 1
 
     cfg = load_config(args.config)
     engine = build_engine(args.engine, args.device, cfg)

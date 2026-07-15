@@ -11,19 +11,24 @@ requires-python = ">=3.9"
 license = { text = "MIT" }
 dependencies = [
     "pyyaml>=6.0",
-    "jiwer>=3.0",
-    "pymupdf>=1.23",
-    "psutil>=5.9",
-    "rapidfuzz>=3.0",
-    "pyspellchecker>=0.8",  # reference-free dictionary_validity proxy
+    "jiwer>=3.0",                     # WER/CER scoring
+    "pymupdf>=1.23",                  # PDF -> PNG rendering
+    "psutil>=5.9",                    # CPU/RAM resource sampling
+    "rapidfuzz>=3.0",                 # fuzzy boilerplate matching
+    "pyspellchecker>=0.8",            # reference-free dictionary_validity proxy
+    "google-cloud-documentai>=2.20",  # Doc AI engine; a normal cross-platform
+                                       # client library, so it's core, not an extra
 ]
 
 [project.optional-dependencies]
-# paddlepaddle itself is intentionally NOT listed: install it manually on the
-# machine that runs real inference (e.g. Colab GPU). Locally we only need the
-# rest of the package to be importable and testable.
+# paddleocr is a normal pip package, but it depends on paddlepaddle, which is
+# NOT listed here or anywhere in this file: paddlepaddle (or paddlepaddle-gpu)
+# must be installed manually, matched to the CUDA version of whatever machine
+# runs real inference (e.g. Colab GPU) -- see the README for the exact command.
 paddle = ["paddleocr>=3.0"]
-docai = ["google-cloud-documentai>=2.20"]
+# pynvml is genuinely optional: resources.py degrades gracefully (GPU metrics
+# come back as None) when it's missing, so it isn't worth forcing on CPU-only
+# installs.
 gpu = ["pynvml>=11.5"]
 dev = ["pytest>=7.0"]
 
