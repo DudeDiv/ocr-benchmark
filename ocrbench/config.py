@@ -103,3 +103,26 @@ class Config:
     def cost_per_page(self, engine: str) -> float:
         costs = self.data.get("costs", {})
         return float(costs.get(f"{engine}_per_page", 0.0))
+
+    # -- Doc AI settings ----------------------------------------------------
+    # Environment variables win over config.yaml. This keeps the real project
+    # id / processor id out of version control (config.yaml only ever ships
+    # placeholders); production values are supplied via the environment on
+    # whatever machine actually runs the docai engine.
+    _DOCAI_ENV_VARS = {
+        "project_id": "OCRBENCH_DOCAI_PROJECT_ID",
+        "region": "OCRBENCH_DOCAI_REGION",
+        "processor_id": "OCRBENCH_DOCAI_PROCESSOR_ID",
+    }
+
+    def docai_settings(self) -> Dict[str, str]:
+        """Resolve project_id/region/processor_id: env var first, config.yaml fallback."""
+        dcfg = self.data.get("docai", {})
+        resolved = {
+            key: os.environ.get(env_var) or str(dcfg.get(key, ""))
+            for key, env_var in self._DOCAI_ENV_VARS.items()
+        }
+        # Google Cloud regional endpoints expect lowercase ("us", "eu"),
+        # regardless of how the value was supplied.
+        resolved["region"] = resolved["region"].lower()
+        return resolved

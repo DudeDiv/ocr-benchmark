@@ -14,32 +14,34 @@ into a single weighted score so I can compare the two at a glance.
 pip install -e .
 ```
 
-That's enough for Doc AI — `google-cloud-documentai` is a normal, cross-platform
-client library, so it's a core dependency, not an extra. GPU resource sampling
-and dev tooling are optional extras, so grab whichever you need:
+That pulls in everything both engines' Python code needs — `google-cloud-documentai`
+and `paddleocr` are both normal, cross-platform packages, so they're core
+dependencies, not extras. GPU resource sampling and dev tooling are the only
+optional extras, so grab whichever you need:
 
 ```bash
 pip install -e ".[gpu]"     # pynvml, for reading GPU util/VRAM
 pip install -e ".[dev]"     # pytest
 ```
 
-PaddleOCR is the one exception, and it's a two-step install:
+There's still one manual step for Paddle:
 
 ```bash
-pip install -e ".[paddle]"           # paddleocr itself
 pip install paddlepaddle-gpu         # or paddlepaddle for CPU-only
 ```
 
-`paddlepaddle`/`paddlepaddle-gpu` is deliberately **not** listed anywhere in
-`pyproject.toml`, extras included — it has to match the CUDA version of whatever
-machine actually runs it (mine is a Colab GPU runtime), so pinning a version here
-would just be wrong somewhere. Check [the PaddlePaddle install
-matrix](https://www.paddlepaddle.org.cn/en/install/quick) for the exact command
-for your CUDA version before installing it. Everything else — the whole rest of
-the package — still imports fine without either paddle package installed, so you
-can develop and run the tests locally regardless.
+`paddlepaddle`/`paddlepaddle-gpu` is the actual inference backend paddleocr
+calls into, and it's deliberately **not** listed anywhere in `pyproject.toml` —
+verified with `pip install --dry-run paddleocr` that installing paddleocr alone
+never pulls it in transitively, which is by design: it has to match the CUDA
+version of whatever machine actually runs it (mine is a Colab GPU runtime), so
+pinning a version here would just be wrong somewhere else. Check [the
+PaddlePaddle install matrix](https://www.paddlepaddle.org.cn/en/install/quick)
+for the exact command for your CUDA version. Everything else — the whole rest
+of the package, including paddleocr itself — imports and tests fine without it,
+so you can develop locally regardless.
 
-If you run `ocrbench.run --engine paddle` without paddleocr installed (or
+If you run `ocrbench.run --engine paddle` without paddlepaddle installed (or
 `--engine docai` without google-cloud-documentai, if you've somehow pruned it),
 the CLI checks for it up front and tells you the exact `pip install` to run,
 rather than dying on the first page — or twelve pages in.
@@ -86,10 +88,26 @@ python -m ocrbench.run --engine docai  --device cpu
 python -m ocrbench.scorecard
 ```
 
-For Document AI you'll need to point it at your processor. Set `project_id`,
-`processor_id`, and `region` under `docai:` in `config.yaml`. Credentials, on the
-other hand, never go in the config — they come from the environment so the key
-doesn't end up in version control:
+For Document AI you'll need to point it at your processor: `project_id`,
+`region`, and `processor_id`. `config.yaml` only ever ships placeholders for
+these (`YOUR_GCP_PROJECT_ID`, etc.) — I don't want the real project/processor
+ids sitting in version control, same reasoning as the credentials below. The
+real values are meant to come from the environment:
+
+```bash
+export OCRBENCH_DOCAI_PROJECT_ID=your-real-project-id      # bash
+export OCRBENCH_DOCAI_REGION=us                             # "us" or "eu"
+export OCRBENCH_DOCAI_PROCESSOR_ID=your-real-processor-id
+```
+
+Environment variables win; `config.yaml` is only a fallback. If you'd rather not
+use env vars, you can edit the `docai:` section of `config.yaml` directly — just
+know it'll be sitting in the repo from then on. Either way, a leftover
+`YOUR_...` placeholder is rejected at startup with a clear message, rather than
+surfacing as an opaque `403 CONSUMER_INVALID` from the API mid-run.
+
+Credentials are a separate thing and never go in the config either — they come
+from the environment so the key file doesn't end up in version control:
 
 ```bash
 export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json          # bash

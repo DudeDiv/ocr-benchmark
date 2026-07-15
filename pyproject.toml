@@ -18,14 +18,18 @@ dependencies = [
     "pyspellchecker>=0.8",            # reference-free dictionary_validity proxy
     "google-cloud-documentai>=2.20",  # Doc AI engine; a normal cross-platform
                                        # client library, so it's core, not an extra
+    "paddleocr>=3.0",                 # Paddle engine wrapper. Confirmed via
+                                       # `pip install --dry-run paddleocr` that
+                                       # it does NOT pull in paddlepaddle as a
+                                       # transitive dependency, so it's core too.
 ]
 
+# paddlepaddle (or paddlepaddle-gpu) is NOT listed anywhere in this file, in
+# core deps or extras: it must be installed manually, matched to the CUDA
+# version of whatever machine actually runs Paddle inference (e.g. Colab GPU)
+# -- see the README for the exact command. Everything else in this package,
+# including paddleocr itself, imports and tests fine without it.
 [project.optional-dependencies]
-# paddleocr is a normal pip package, but it depends on paddlepaddle, which is
-# NOT listed here or anywhere in this file: paddlepaddle (or paddlepaddle-gpu)
-# must be installed manually, matched to the CUDA version of whatever machine
-# runs real inference (e.g. Colab GPU) -- see the README for the exact command.
-paddle = ["paddleocr>=3.0"]
 # pynvml is genuinely optional: resources.py degrades gracefully (GPU metrics
 # come back as None) when it's missing, so it isn't worth forcing on CPU-only
 # installs.

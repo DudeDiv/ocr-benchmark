@@ -36,10 +36,15 @@ from .resources import ResourceSampler
 # exceptions by design (see run_over_manifest).
 _ENGINE_DEPENDENCIES: Dict[str, List[Tuple[str, str]]] = {
     "paddle": [
+        ("paddleocr", "paddleocr>=3.0"),
+        # paddleocr imports cleanly even without its own backend installed --
+        # it only touches `paddle` once you construct PaddleOCR(...) -- so the
+        # backend needs its own explicit check, or this preflight would always
+        # pass and the failure would show up on the first real page instead.
         (
-            "paddleocr",
-            "paddleocr>=3.0 (plus a matching paddlepaddle / paddlepaddle-gpu "
-            "build for your hardware -- see README)",
+            "paddle",
+            "paddlepaddle-gpu (or paddlepaddle for CPU-only), matched to your "
+            "hardware -- see README for the exact command",
         ),
     ],
     "docai": [
@@ -65,6 +70,34 @@ def preflight(engine: str) -> Optional[str]:
     return None
 
 
+def preflight_config(engine: str, cfg: Config) -> Optional[str]:
+    """Reject unresolved placeholder Doc AI settings before touching any pages.
+
+    config.yaml only ever ships placeholders ("YOUR_GCP_PROJECT_ID", etc.); the
+    real values are meant to come from the OCRBENCH_DOCAI_* environment
+    variables (see Config.docai_settings). Shipping a placeholder into
+    production surfaces as an opaque 403 CONSUMER_INVALID from the API instead
+    of a clear local error, so this catches it before the run even starts.
+    """
+    if engine != "docai":
+        return None
+
+    settings = cfg.docai_settings()
+    placeholders = sorted(
+        key for key, value in settings.items()
+        if isinstance(value, str) and value.startswith("YOUR_")
+    )
+    if placeholders:
+        return (
+            f"Doc AI config not set: {', '.join(placeholders)} still start "
+            f"with 'YOUR_' (the config.yaml placeholder).\n"
+            f"Fix: set OCRBENCH_DOCAI_PROJECT_ID / OCRBENCH_DOCAI_REGION / "
+            f"OCRBENCH_DOCAI_PROCESSOR_ID as environment variables, or edit "
+            f"the docai: section of config.yaml directly."
+        )
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # Engine construction
 # --------------------------------------------------------------------------- #
@@ -86,10 +119,11 @@ def build_engine(engine: str, device: str, cfg: Config) -> OCREngine:
         from .engines.docai_engine import DocAIEngine
 
         dcfg = cfg.get("docai", {})
+        settings = cfg.docai_settings()  # env vars win, config.yaml is fallback
         return DocAIEngine(
-            project_id=dcfg["project_id"],
-            processor_id=dcfg["processor_id"],
-            region=dcfg.get("region", "us"),
+            project_id=settings["project_id"],
+            processor_id=settings["processor_id"],
+            region=settings["region"],
             processor_version=dcfg.get("processor_version") or None,
             mime_type=dcfg.get("mime_type", "image/png"),
             raw_dir=str(cfg.raw_dir()),
@@ -470,6 +504,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     cfg = load_config(args.config)
+
+    config_error = preflight_config(args.engine, cfg)
+    if config_error:
+        print(config_error, file=sys.stderr)
+        return 1
+
     engine = build_engine(args.engine, args.device, cfg)
 
     rows = run_over_manifest(

@@ -193,20 +193,31 @@ def test_main_prints_none_error_summary_on_full_success(
     assert "none" in captured.out
 
 
-def test_preflight_flags_missing_paddleocr():
-    # This dev machine deliberately does not have paddleocr installed (real
-    # runs happen on Colab GPU), so this exercises the real ImportError path.
-    try:
-        import paddleocr  # noqa: F401
+def test_preflight_passes_paddleocr_import_check():
+    # paddleocr is a core dependency, so it should always be importable --
+    # this only checks the paddleocr import itself, not the paddle backend
+    # (paddleocr imports fine even without its backend installed; see the
+    # dedicated backend test below).
+    pytest.importorskip("paddleocr")
 
-        pytest.skip("paddleocr is installed in this environment")
+
+def test_preflight_flags_missing_paddlepaddle_backend():
+    # paddleocr is a core dependency and imports cleanly even without its
+    # backend, but this dev machine deliberately does not have paddlepaddle
+    # installed (real runs happen on Colab GPU) -- paddleocr only touches
+    # `paddle` once you construct PaddleOCR(...), so the backend needs its
+    # own explicit check. This exercises the real ImportError path.
+    try:
+        import paddle  # noqa: F401
+
+        pytest.skip("paddlepaddle is installed in this environment")
     except ImportError:
         pass
 
     msg = runner.preflight("paddle")
     assert msg is not None
     assert "pip install" in msg
-    assert "paddleocr" in msg
+    assert "paddle" in msg
 
 
 def test_preflight_passes_for_docai_core_dependency():
@@ -214,11 +225,11 @@ def test_preflight_passes_for_docai_core_dependency():
     assert runner.preflight("docai") is None
 
 
-def test_main_fails_fast_on_missing_paddle_dependency(tmp_path, capsys):
+def test_main_fails_fast_on_missing_paddlepaddle_backend(tmp_path, capsys):
     try:
-        import paddleocr  # noqa: F401
+        import paddle  # noqa: F401
 
-        pytest.skip("paddleocr is installed in this environment")
+        pytest.skip("paddlepaddle is installed in this environment")
     except ImportError:
         pass
 
@@ -230,6 +241,79 @@ def test_main_fails_fast_on_missing_paddle_dependency(tmp_path, capsys):
     assert rc == 1
     assert "Missing dependency for --engine paddle" in captured.err
     assert "pip install" in captured.err
+
+
+def test_preflight_config_ignores_non_docai_engines():
+    from ocrbench.config import Config
+
+    cfg = Config({"docai": {"project_id": "YOUR_GCP_PROJECT_ID"}})
+    assert runner.preflight_config("paddle", cfg) is None
+
+
+def test_preflight_config_rejects_placeholder_values():
+    from ocrbench.config import Config
+
+    cfg = Config({
+        "docai": {
+            "project_id": "YOUR_GCP_PROJECT_ID",
+            "processor_id": "YOUR_PROCESSOR_ID",
+            "region": "us",
+        }
+    })
+    msg = runner.preflight_config("docai", cfg)
+    assert msg is not None
+    assert "project_id" in msg
+    assert "processor_id" in msg
+    assert "YOUR_" in msg
+    assert "OCRBENCH_DOCAI_PROJECT_ID" in msg
+
+
+def test_preflight_config_passes_with_env_vars(monkeypatch):
+    from ocrbench.config import Config
+
+    monkeypatch.setenv("OCRBENCH_DOCAI_PROJECT_ID", "ocr-benchmark-502416")
+    monkeypatch.setenv("OCRBENCH_DOCAI_REGION", "US")
+    monkeypatch.setenv("OCRBENCH_DOCAI_PROCESSOR_ID", "234ea23afbe0364a")
+
+    cfg = Config({
+        "docai": {
+            "project_id": "YOUR_GCP_PROJECT_ID",
+            "processor_id": "YOUR_PROCESSOR_ID",
+            "region": "us",
+        }
+    })
+    assert runner.preflight_config("docai", cfg) is None
+
+
+def test_main_rejects_placeholder_docai_config_before_build_engine(
+    temp_workspace, monkeypatch, capsys
+):
+    cfg, hyp, gt = temp_workspace
+    cfg.data["docai"] = {
+        "project_id": "YOUR_GCP_PROJECT_ID",
+        "processor_id": "YOUR_PROCESSOR_ID",
+        "region": "us",
+    }
+    for var in ("OCRBENCH_DOCAI_PROJECT_ID", "OCRBENCH_DOCAI_REGION", "OCRBENCH_DOCAI_PROCESSOR_ID"):
+        monkeypatch.delenv(var, raising=False)
+
+    called = {"build_engine": False}
+    monkeypatch.setattr(runner, "preflight", lambda engine: None)
+    monkeypatch.setattr(runner, "load_config", lambda path=None: cfg)
+
+    def _should_not_be_called(engine, device, c):
+        called["build_engine"] = True
+        raise AssertionError("build_engine must not run past a placeholder config")
+
+    monkeypatch.setattr(runner, "build_engine", _should_not_be_called)
+
+    rc = runner.main(["--engine", "docai", "--device", "cpu"])
+    captured = capsys.readouterr()
+
+    assert rc == 1
+    assert called["build_engine"] is False
+    assert "YOUR_" in captured.err
+    assert "OCRBENCH_DOCAI_PROJECT_ID" in captured.err
 
 
 def test_docai_cost_applied(temp_workspace):
