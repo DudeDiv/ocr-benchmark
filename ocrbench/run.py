@@ -12,6 +12,8 @@ import argparse
 import csv
 import json
 import platform
+import sys
+import traceback
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,12 +30,18 @@ from .resources import ResourceSampler
 # Engine construction
 # --------------------------------------------------------------------------- #
 def build_engine(engine: str, device: str, cfg: Config) -> OCREngine:
-    use_gpu = device == "gpu"
     if engine == "paddle":
         from .engines.paddle_engine import PaddleEngine
 
         pcfg = cfg.get("paddle", {})
-        return PaddleEngine(lang=pcfg.get("lang", "en"), use_gpu=use_gpu)
+        return PaddleEngine(
+            lang=pcfg.get("lang", "en"),
+            device=device,
+            use_doc_orientation_classify=pcfg.get(
+                "use_doc_orientation_classify", False
+            ),
+            use_doc_unwarping=pcfg.get("use_doc_unwarping", False),
+        )
 
     if engine == "docai":
         from .engines.docai_engine import DocAIEngine
@@ -79,6 +87,8 @@ class PageRow:
     peak_gpu_util_percent: Optional[float] = None
     peak_vram_mb: Optional[float] = None
     error: Optional[str] = None
+    error_type: Optional[str] = None  # exception class name, or "MissingImage"
+    error_traceback: Optional[str] = None  # full traceback text, when available
     # normalized hypothesis text, kept so cross-engine agreement can be computed
     # after both engines have run. Included in JSON, excluded from the CSV.
     normalized_hyp: Optional[str] = None
@@ -149,8 +159,11 @@ def run_over_manifest(
             image_path = images_dir / doc / f"page_{page}.png"
             if not image_path.exists():
                 rows.append(
-                    _error_row(doc, page, engine.name, device, image_path,
-                               "image not found")
+                    _error_row(
+                        doc, page, engine.name, device, image_path,
+                        msg=f"image not found: {image_path}",
+                        error_type="MissingImage",
+                    )
                 )
                 continue
 
@@ -160,8 +173,12 @@ def run_over_manifest(
                 )
             except Exception as exc:  # keep the run going on a single failure
                 rows.append(
-                    _error_row(doc, page, engine.name, device, image_path,
-                               f"{type(exc).__name__}: {exc}")
+                    _error_row(
+                        doc, page, engine.name, device, image_path,
+                        msg=f"{type(exc).__name__}: {exc}",
+                        error_type=type(exc).__name__,
+                        tb=traceback.format_exc(),
+                    )
                 )
                 continue
 
@@ -206,12 +223,15 @@ def run_over_manifest(
     return rows
 
 
-def _error_row(doc, page, engine, device, image_path, msg) -> PageRow:
+def _error_row(
+    doc, page, engine, device, image_path, msg, error_type=None, tb=None
+) -> PageRow:
     return PageRow(
         doc=doc, page=page, engine=engine, device=device,
         image_path=str(image_path), inference_seconds=0.0, network_seconds=None,
         wer=None, cer=None, exact_match=None, ref_word_count=0, hyp_word_count=0,
-        ocr_word_count=0, mean_confidence=None, min_confidence=None, error=msg,
+        ocr_word_count=0, mean_confidence=None, min_confidence=None,
+        error=msg, error_type=error_type, error_traceback=tb,
     )
 
 
@@ -281,7 +301,7 @@ CSV_FIELDS = [
     "wer", "cer", "exact_match", "dictionary_validity", "cross_engine_agreement",
     "ref_word_count", "hyp_word_count", "ocr_word_count",
     "mean_confidence", "min_confidence", "peak_cpu_percent", "peak_ram_mb",
-    "peak_gpu_util_percent", "peak_vram_mb", "error",
+    "peak_gpu_util_percent", "peak_vram_mb", "error", "error_type",
 ]
 
 
@@ -378,6 +398,17 @@ def augment_cross_engine_agreement(results_dir: Path) -> bool:
     return updated
 
 
+def summarize_errors(rows: List[PageRow]) -> Dict[str, int]:
+    """Count failed pages by ``error_type`` (falls back to ``error`` text)."""
+    counts: Dict[str, int] = {}
+    for r in rows:
+        if r.error is None:
+            continue
+        key = r.error_type or r.error
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
@@ -420,6 +451,30 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     if paired:
         print("Cross-engine agreement computed against the other engine's results.")
+
+    # Always print an error summary, even on a fully successful run (so "no
+    # errors" is stated explicitly rather than implied by silence).
+    error_counts = summarize_errors(rows)
+    print(f"\nErrors: {result['pages_failed']} of {result['pages_total']} page(s) failed.")
+    if error_counts:
+        for etype, count in sorted(error_counts.items(), key=lambda kv: (-kv[1], kv[0])):
+            print(f"  {etype}: {count}")
+    else:
+        print("  none")
+
+    if result["pages_ok"] == 0:
+        failures = [r for r in rows if r.error is not None]
+        print(
+            f"\nFATAL: 0/{result['pages_total']} pages succeeded for "
+            f"{args.engine}/{args.device}. First {min(3, len(failures))} failure(s):\n",
+            file=sys.stderr,
+        )
+        for r in failures[:3]:
+            print(f"--- {r.doc} page {r.page} ({r.error_type}) ---", file=sys.stderr)
+            print(r.error_traceback or r.error, file=sys.stderr)
+            print(file=sys.stderr)
+        return 1
+
     return 0
 
 

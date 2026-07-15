@@ -5,6 +5,7 @@ Output layout: ``{images_dir}/{doc}/page_{n}.png`` at the configured DPI.
 
 from __future__ import annotations
 
+import fnmatch
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -51,12 +52,25 @@ def render_document(
     return out_paths
 
 
-def _pdf_path_for(doc: str, pdfs_dir: Path) -> Optional[Path]:
-    for ext in (".pdf", ".PDF"):
-        candidate = pdfs_dir / f"{doc}{ext}"
-        if candidate.exists():
-            return candidate
-    return None
+def _pdf_path_for(doc: str, pdfs_dir: Path) -> Path:
+    """Case-insensitively match ``{doc}*.pdf`` inside ``pdfs_dir``.
+
+    E.g. doc id ``GS-1`` matches ``GS-1.pdf``, ``gs-1.pdf``, ``GS-1_scan.pdf``,
+    etc. Raises FileNotFoundError naming the doc id, the directory searched, and
+    the files actually present there if nothing matches.
+    """
+    entries = sorted(pdfs_dir.iterdir()) if pdfs_dir.is_dir() else []
+    pattern = f"{doc}*.pdf".lower()
+    matches = sorted(
+        p for p in entries if p.is_file() and fnmatch.fnmatch(p.name.lower(), pattern)
+    )
+    if not matches:
+        found = [p.name for p in entries] or ["(none)"]
+        raise FileNotFoundError(
+            f"No PDF found for document '{doc}' (pattern '{doc}*.pdf', "
+            f"case-insensitive) in {pdfs_dir}. Files found there: {found}"
+        )
+    return matches[0]
 
 
 def render_all(
@@ -71,10 +85,6 @@ def render_all(
     rendered: Dict[str, List[Path]] = {}
     for doc, pages in cfg.manifests.items():
         pdf_path = _pdf_path_for(doc, pdfs_dir)
-        if pdf_path is None:
-            raise FileNotFoundError(
-                f"No PDF found for document '{doc}' in {pdfs_dir}"
-            )
         rendered[doc] = render_document(
             doc, str(pdf_path), pages, images_dir, dpi, overwrite=overwrite
         )

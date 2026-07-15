@@ -22,7 +22,7 @@ dependencies = [
 # paddlepaddle itself is intentionally NOT listed: install it manually on the
 # machine that runs real inference (e.g. Colab GPU). Locally we only need the
 # rest of the package to be importable and testable.
-paddle = ["paddleocr>=2.7"]
+paddle = ["paddleocr>=3.0"]
 docai = ["google-cloud-documentai>=2.20"]
 gpu = ["pynvml>=11.5"]
 dev = ["pytest>=7.0"]

@@ -12,7 +12,7 @@ venv/
 # Benchmark artifacts
 work/
 results/
-data/pdfs/
+pdfs/
 
 # Credentials — never commit the GCP service-account key
 *.json

@@ -3,7 +3,7 @@
 # All paths are relative to the repository root unless absolute.
 
 paths:
-  input_pdfs: data/pdfs          # source booklet PDFs, one file per document id
+  input_pdfs: pdfs                # source booklet PDFs, one file per document id
   work_dir: work
   images_dir: work/images        # rendered PNGs: work/images/{doc}/page_{n}.png
   raw_dir: work/raw              # raw engine responses (e.g. work/raw/docai/*.json)
@@ -14,8 +14,9 @@ render:
   dpi: 300                       # PyMuPDF render resolution
 
 paddle:
-  lang: en
-  use_gpu: false                 # overridden by --device on the CLI
+  lang: en                       # device (cpu/gpu) comes from --device on the CLI
+  use_doc_orientation_classify: false
+  use_doc_unwarping: false
   sampler_interval: 0.1          # seconds between resource samples during Paddle runs
 
 docai:

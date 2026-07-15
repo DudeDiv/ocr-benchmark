@@ -13,11 +13,13 @@ from ocrbench.engines.base import OCREngine, OCRResult, Word
 class MockEngine(OCREngine):
     """Deterministic engine driven by a {(doc, page) or image-stem -> text} map."""
 
-    def __init__(self, name="paddle", texts=None, per_word_conf=0.9, infer_s=0.05):
+    def __init__(self, name="paddle", texts=None, per_word_conf=0.9, infer_s=0.05,
+                 raise_error=None):
         self.name = name
         self.texts = texts or {}
         self.per_word_conf = per_word_conf
         self.infer_s = infer_s
+        self.raise_error = raise_error  # exception instance/class to raise on process()
         self.warmed = False
         self.calls = []
 
@@ -26,6 +28,8 @@ class MockEngine(OCREngine):
 
     def process(self, image_path: str) -> OCRResult:
         self.calls.append(image_path)
+        if self.raise_error is not None:
+            raise self.raise_error
         p = Path(image_path)
         key = f"{p.parent.name}/{p.stem}"
         text = self.texts.get(key, "hello world")
@@ -79,7 +83,7 @@ def temp_workspace(tmp_path):
 
     data = {
         "paths": {
-            "input_pdfs": "data/pdfs",
+            "input_pdfs": "pdfs",
             "work_dir": "work",
             "images_dir": str(images_dir),
             "raw_dir": str(tmp_path / "work" / "raw"),
@@ -87,7 +91,12 @@ def temp_workspace(tmp_path):
             "results_dir": str(results_dir),
         },
         "render": {"dpi": 300},
-        "paddle": {"lang": "en", "use_gpu": False, "sampler_interval": 0.01},
+        "paddle": {
+            "lang": "en",
+            "use_doc_orientation_classify": False,
+            "use_doc_unwarping": False,
+            "sampler_interval": 0.01,
+        },
         "manifests": manifests,
         "costs": {"paddle_per_page": 0.0, "docai_per_page": 0.0015},
         "metrics": {"strip_punctuation": True, "fuzzy_threshold": 85},

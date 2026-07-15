@@ -38,7 +38,7 @@ ocrbench/
   preprocess.py        # PyMuPDF renders manifest pages -> work/images/{doc}/page_{n}.png
   engines/
     base.py            # the OCREngine interface + OCRResult/Word
-    paddle_engine.py   # PaddleOCR (English, GPU toggle, warm-up call isn't timed)
+    paddle_engine.py   # PaddleOCR 3.x (English, device=cpu/gpu, warm-up call isn't timed)
     docai_engine.py    # Document AI, keeps the raw JSON under work/raw/docai/
   metrics.py           # text normalization + WER/CER via jiwer, plus confidence stats
   resources.py         # background psutil/pynvml sampler, only runs during Paddle
@@ -48,6 +48,13 @@ tests/                 # unit tests against a mocked engine (no paddle required)
 ```
 
 ## Running a benchmark
+
+Drop the source booklet PDFs in `pdfs/` at the repo root — one file per document
+id, e.g. `pdfs/GS-1.pdf` for the `GS-1` manifest entry. The lookup is tolerant:
+it matches `{doc}*.pdf` case-insensitively, so `gs-1.pdf` or `GS-1_scan.pdf` both
+work. If nothing matches, it fails with an error naming the doc id, the
+directory it searched, and the files it actually found there — no silent
+mismatch.
 
 Three steps. First render the pages you care about to images, then run each
 engine, then look at the scorecard:
@@ -73,6 +80,12 @@ doesn't end up in version control:
 export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json          # bash
 $env:GOOGLE_APPLICATION_CREDENTIALS = "C:\path\to\service-account.json"      # PowerShell
 ```
+
+The runner never ends quietly. Every run prints an error summary by exception
+type (even "none" if everything succeeded), and if every single page fails it
+still writes the results file — so the per-page error details are there to
+inspect — but also prints the first three tracebacks and exits non-zero, rather
+than reporting success on a run that produced nothing.
 
 ## About the manifests
 

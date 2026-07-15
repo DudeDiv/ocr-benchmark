@@ -115,6 +115,79 @@ def test_cross_engine_agreement_augmentation(temp_workspace):
         assert data["mean_cross_engine_agreement"] == 0.0
 
 
+def test_process_exception_captures_type_and_traceback(temp_workspace):
+    cfg, hyp, gt = temp_workspace
+    engine = MockEngine(name="paddle", texts=hyp, raise_error=RuntimeError("boom"))
+
+    rows = runner.run_over_manifest(engine, cfg, device="cpu")
+    assert all(r.error is not None for r in rows)
+    assert all(r.error_type == "RuntimeError" for r in rows)
+    assert all(r.error_traceback is not None for r in rows)
+    assert all("RuntimeError: boom" in r.error_traceback for r in rows)
+
+
+def test_missing_image_has_error_type_but_no_traceback(temp_workspace):
+    cfg, hyp, gt = temp_workspace
+    cfg.data["manifests"]["doc001"].append(99)
+    engine = MockEngine(name="paddle", texts=hyp)
+
+    rows = runner.run_over_manifest(engine, cfg, device="cpu")
+    err = [r for r in rows if r.page == 99][0]
+    assert err.error_type == "MissingImage"
+    assert err.error_traceback is None
+
+
+def test_summarize_errors_counts_by_type(temp_workspace):
+    cfg, hyp, gt = temp_workspace
+    cfg.data["manifests"]["doc001"].append(99)  # -> one MissingImage
+    engine = MockEngine(name="paddle", texts=hyp, raise_error=ValueError("bad"))
+
+    rows = runner.run_over_manifest(engine, cfg, device="cpu")
+    counts = runner.summarize_errors(rows)
+    # pages 1 and 2 raise ValueError during process(), page 99's image is missing
+    assert counts == {"ValueError": 2, "MissingImage": 1}
+
+
+def test_main_exits_nonzero_and_prints_tracebacks_on_total_failure(
+    temp_workspace, monkeypatch, capsys
+):
+    cfg, hyp, gt = temp_workspace
+    failing_engine = MockEngine(name="paddle", texts=hyp, raise_error=RuntimeError("boom"))
+
+    monkeypatch.setattr(runner, "load_config", lambda path=None: cfg)
+    monkeypatch.setattr(runner, "build_engine", lambda engine, device, c: failing_engine)
+
+    rc = runner.main(["--engine", "paddle", "--device", "cpu"])
+    captured = capsys.readouterr()
+
+    assert rc == 1
+    assert "FATAL" in captured.err
+    assert "0/2 pages succeeded" in captured.err
+    assert "RuntimeError" in captured.err
+    assert "boom" in captured.err
+    # error summary is printed on stdout regardless of outcome
+    assert "RuntimeError: 2" in captured.out
+
+
+def test_main_prints_none_error_summary_on_full_success(
+    temp_workspace, monkeypatch, capsys
+):
+    pytest.importorskip("jiwer")
+    cfg, hyp, gt = temp_workspace
+    ok_engine = MockEngine(name="paddle", texts=hyp)
+
+    monkeypatch.setattr(runner, "load_config", lambda path=None: cfg)
+    monkeypatch.setattr(runner, "build_engine", lambda engine, device, c: ok_engine)
+
+    rc = runner.main(["--engine", "paddle", "--device", "cpu"])
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert "FATAL" not in captured.err
+    assert "Errors: 0 of 2 page(s) failed." in captured.out
+    assert "none" in captured.out
+
+
 def test_docai_cost_applied(temp_workspace):
     pytest.importorskip("jiwer")
     cfg, hyp, gt = temp_workspace
